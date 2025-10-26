@@ -65,6 +65,11 @@ declare global {
       // Logging
       LOG_LEVEL: string;
       LOG_FILE_PATH: string;
+
+      // Vercel Environment Variables
+      VERCEL_REGION: string;
+      VERCEL_URL: string;
+      VERCEL_DEPLOYMENT_ID: string;
     }
   }
 }

@@ -39,7 +39,8 @@
   },
   "include": [
     "api/**/*",
-    "global.d.ts"
+    "global.d.ts",
+    "api/api.d.ts"
   ],
   "exclude": [
     "node_modules",

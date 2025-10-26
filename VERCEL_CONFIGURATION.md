@@ -6,6 +6,12 @@ This document provides comprehensive configuration for deploying the Sinceides P
 
 ## 🔧 Vercel Configuration Files
 
+> **Important**: 
+> - The `functions` property cannot be used with `builds` property
+> - The `routes` property cannot be used with `rewrites`, `headers`, `redirects`, `cleanUrls`, or `trailingSlash`
+> - All function configuration is defined within `builds.config`
+> - All routing is handled by `rewrites` instead of `routes`
+
 ### vercel.json
 ```json
 {
@@ -18,38 +24,15 @@ This document provides comprehensive configuration for deploying the Sinceides P
         "includeFiles": [
           "api/**/*",
           "global.d.ts"
-        ]
+        ],
+        "maxDuration": 30,
+        "memory": 1024,
+        "runtime": "nodejs18.x"
       }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/index.ts",
-      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"]
-    },
-    {
-      "src": "/docs",
-      "dest": "/api/index.ts"
-    },
-    {
-      "src": "/health",
-      "dest": "/api/index.ts"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/api/index.ts"
     }
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "api/index.ts": {
-      "maxDuration": 30,
-      "memory": 1024,
-      "runtime": "nodejs18.x"
-    }
   },
   "regions": ["iad1"],
   "framework": null,
@@ -60,6 +43,18 @@ This document provides comprehensive configuration for deploying the Sinceides P
   "rewrites": [
     {
       "source": "/api/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/docs",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/api/index.ts"
     }
   ],
@@ -89,6 +84,20 @@ This document provides comprehensive configuration for deploying the Sinceides P
   "crons": []
 }
 ```
+
+## 🔄 Routing Configuration
+
+### Routes vs Rewrites
+- **Routes**: Used for simple routing with methods specification
+- **Rewrites**: Used for URL rewriting without changing the browser URL
+- **Conflict**: Cannot use both `routes` and `rewrites`/`headers` together
+
+### Current Configuration
+We use `rewrites` to handle all routing:
+- `/api/*` → `/api/index.ts`
+- `/docs` → `/api/index.ts`
+- `/health` → `/api/index.ts`
+- `/*` → `/api/index.ts` (catch-all)
 
 ## 🚀 Deployment Configuration
 
@@ -186,6 +195,7 @@ vercel env add CORS_ORIGIN
 - **Memory**: 1024MB (1GB)
 - **Max Duration**: 30 seconds
 - **Region**: US East (iad1)
+- **Configuration**: Defined in `builds.config` (not `functions` property)
 
 ### Cold Start Optimization
 ```javascript

@@ -11,8 +11,8 @@ import app from './api.js';
 // Vercel serverless function handler
 export default async function handler(req: any, res: any) {
   // Add Vercel-specific headers
-  res.setHeader('x-vercel-region', process.env.VERCEL_REGION || 'unknown');
-  res.setHeader('x-vercel-deployment-url', process.env.VERCEL_URL || 'unknown');
+  res.setHeader('x-vercel-region', process.env['VERCEL_REGION'] || 'unknown');
+  res.setHeader('x-vercel-deployment-url', process.env['VERCEL_URL'] || 'unknown');
   
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
