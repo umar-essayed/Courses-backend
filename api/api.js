@@ -1,7 +1,7 @@
 /**
- * Sinceides Platform - API Layer
- * This file contains all API endpoints, middleware, and controllers
- * Updated with enhanced security and comprehensive documentation
+ * Sinceides Platform - Main API Application
+ * Express.js application with Supabase and Cloudinary integration
+ * Optimized for Vercel serverless functions
  */
 
 const express = require('express');
@@ -68,15 +68,6 @@ const {
 const SecurityConfig = require('./security.js');
 const { videoProcessingService, videoStreamingService } = require('./video-processing.js');
 
-// Types (using JSDoc for TypeScript-like comments)
-/**
- * @typedef {Object} AuthenticatedRequest
- * @property {Object} user
- * @property {string} user.id
- * @property {string} user.email
- * @property {string} user.role
- */
-
 // Configuration
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -86,33 +77,123 @@ const VERCEL_URL = process.env.VERCEL_URL || 'unknown';
 // Initialize Express app
 const app = express();
 
-// Security Middleware
-app.use(SecurityConfig.getHelmetConfig());
-
-// CORS Configuration
-app.use(SecurityConfig.getCorsConfig());
-
-// Rate Limiting
-app.use('/api', SecurityConfig.getRateLimitConfig());
-
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Security middleware
+app.use(helmet(SecurityConfig.helmetConfig));
+app.use(cors(SecurityConfig.corsConfig));
 
 // Compression middleware
 app.use(compression());
 
-// Logging middleware
-if (NODE_ENV === 'development') {
+// Request logging
+if (NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 } else {
   app.use(morgan('combined'));
 }
 
+// Rate limiting
+const limiter = rateLimit(SecurityConfig.rateLimitConfig);
+app.use('/api/', limiter);
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Passport configuration
+passport.use(new JwtStrategy({
+  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+  secretOrKey: process.env.JWT_SECRET
+}, async (payload, done) => {
+  try {
+    const user = await userRepo.findById(payload.id);
+    if (user && !user.isBlocked) {
+      return done(null, {
+        id: user.id,
+        email: user.email,
+        role: user.role
+      });
+    }
+    return done(null, false);
+  } catch (error) {
+    return done(error, false);
+  }
+}));
+
+// Middleware classes
+class AuthMiddleware {
+  static authenticate() {
+    return passport.authenticate('jwt', { session: false });
+  }
+
+  static initializePassport() {
+    passport.initialize();
+  }
+}
+
+class RequestIdMiddleware {
+  static generate() {
+    return (req, res, next) => {
+      req.requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      res.setHeader('X-Request-ID', req.requestId);
+      next();
+    };
+  }
+}
+
+class UploadMiddleware {
+  static processImage() {
+    return async (req, res, next) => {
+      if (req.file) {
+        try {
+          const processedBuffer = await sharp(req.file.buffer)
+            .resize(800, 600, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 80 })
+            .toBuffer();
+          req.file.buffer = processedBuffer;
+        } catch (error) {
+          return res.status(400).json({ error: 'Image processing failed' });
+        }
+      }
+      next();
+    };
+  }
+}
+
+class ValidationMiddleware {
+  static validate(schema) {
+    return (req, res, next) => {
+      try {
+        schema.parse(req.body);
+        next();
+      } catch (error) {
+        res.status(400).json({ error: 'Validation failed', details: error.errors });
+      }
+    };
+  }
+}
+
+class ErrorHandler {
+  static handle() {
+    return (error, req, res, next) => {
+      console.error('Error:', error);
+      
+      if (error.name === 'ValidationError') {
+        return res.status(400).json({ error: 'Validation failed', details: error.errors });
+      }
+      
+      if (error.name === 'UnauthorizedError') {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      
+      res.status(500).json({ error: 'Internal server error' });
+    };
+  }
+}
+
 // File upload configuration
 const storage = multer.memoryStorage();
 
-const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+const fileFilter = (req, file, cb) => {
   const allAllowedTypes = [
     ...SecurityConfig.ALLOWED_IMAGE_TYPES,
     ...SecurityConfig.ALLOWED_VIDEO_TYPES,
@@ -130,44 +211,523 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: parseInt(process.env.MAX_FILE_SIZE?.replace('MB', '') || '50') * 1024 * 1024 // Convert MB to bytes
+    fileSize: 100 * 1024 * 1024 // 100MB
   }
 });
 
-// Passport JWT Strategy
-passport.use(new JwtStrategy({
-  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-  secretOrKey: process.env.JWT_SECRET!
-}, async (payload, done) => {
-  try {
-    const user = await userRepo.findById(payload.id);
-    if (user && !user.isBlocked) {
-      return done(null, {
-        id: user.id,
-        email: user.email,
-        role: user.role
-      });
+// Initialize passport
+AuthMiddleware.initializePassport();
+
+// API Router
+const apiRouter = express.Router();
+
+// Controllers
+class AuthController {
+  static async register(req, res) {
+    try {
+      const userData = registerSchema.parse(req.body);
+      const user = await authService.register(userData);
+      res.status(201).json({ success: true, data: user });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
     }
-    return done(null, false);
-  } catch (error) {
-    return done(error, false);
-  }
-}));
-
-// Middleware Classes
-export class AuthMiddleware {
-  static authenticate() {
-    return passport.authenticate('jwt', { session: false });
   }
 
-  static initializePassport() {
-    passport.initialize();
+  static async login(req, res) {
+    try {
+      const credentials = loginSchema.parse(req.body);
+      const result = await authService.login(credentials);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      res.status(401).json({ error: error.message });
+    }
+  }
+
+  static async refreshToken(req, res) {
+    try {
+      const { refreshToken } = refreshSchema.parse(req.body);
+      const result = await authService.refreshToken(refreshToken);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      res.status(401).json({ error: error.message });
+    }
+  }
+
+  static async logout(req, res) {
+    try {
+      const { refreshToken } = req.body;
+      await authService.logout(refreshToken);
+      res.json({ success: true, message: 'Logged out successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
   }
 }
 
-export class RBACMiddleware {
-  static checkRole(roles: Role[]) {
-    return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+class UserController {
+  static async getUser(req, res) {
+    try {
+      const user = await userService.getUserById(req.user.id);
+      res.json({ success: true, data: user });
+    } catch (error) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
+  static async updateUser(req, res) {
+    try {
+      const user = await userService.updateUser(req.user.id, req.body);
+      res.json({ success: true, data: user });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async blockUser(req, res) {
+    try {
+      const { userId } = req.params;
+      await userService.blockUser(userId);
+      res.json({ success: true, message: 'User blocked successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async unblockUser(req, res) {
+    try {
+      const { userId } = req.params;
+      await userService.unblockUser(userId);
+      res.json({ success: true, message: 'User unblocked successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async softDeleteUser(req, res) {
+    try {
+      const { userId } = req.params;
+      await userService.softDeleteUser(userId);
+      res.json({ success: true, message: 'User deleted successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async restoreUser(req, res) {
+    try {
+      const { userId } = req.params;
+      await userService.restoreUser(userId);
+      res.json({ success: true, message: 'User restored successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async getUserReport(req, res) {
+    try {
+      const { userId } = req.params;
+      const report = await userService.getUserReport(userId);
+      res.json({ success: true, data: report });
+    } catch (error) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
+  static async getUsers(req, res) {
+    try {
+      const { page = 1, limit = 10, role, status } = req.query;
+      const users = await userService.getUsers({ page, limit, role, status });
+      res.json({ success: true, data: users });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class CourseController {
+  static async getCoursesPublic(req, res) {
+    try {
+      const { page = 1, limit = 10, category, level, search } = req.query;
+      const courses = await courseService.getCoursesPublic({ page, limit, category, level, search });
+      res.json({ success: true, data: courses });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async createCourse(req, res) {
+    try {
+      const courseData = courseCreateSchema.parse(req.body);
+      const course = await courseService.createCourse(req.user.id, courseData, req.file);
+      res.status(201).json({ success: true, data: course });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async getCourse(req, res) {
+    try {
+      const { courseId } = req.params;
+      const course = await courseService.getCourseById(courseId);
+      res.json({ success: true, data: course });
+    } catch (error) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
+  static async updateCourse(req, res) {
+    try {
+      const { courseId } = req.params;
+      const course = await courseService.updateCourse(courseId, req.body, req.file);
+      res.json({ success: true, data: course });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async softDeleteCourse(req, res) {
+    try {
+      const { courseId } = req.params;
+      await courseService.softDeleteCourse(courseId);
+      res.json({ success: true, message: 'Course deleted successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async restoreCourse(req, res) {
+    try {
+      const { courseId } = req.params;
+      await courseService.restoreCourse(courseId);
+      res.json({ success: true, message: 'Course restored successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class LessonController {
+  static async createLesson(req, res) {
+    try {
+      const lessonData = lessonCreateSchema.parse(req.body);
+      const lesson = await lessonService.createLesson(req.user.id, lessonData, req.files);
+      res.status(201).json({ success: true, data: lesson });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async getLesson(req, res) {
+    try {
+      const { lessonId } = req.params;
+      const lesson = await lessonService.getLessonById(lessonId);
+      res.json({ success: true, data: lesson });
+    } catch (error) {
+      res.status(404).json({ error: error.message });
+    }
+  }
+
+  static async updateLesson(req, res) {
+    try {
+      const { lessonId } = req.params;
+      const lesson = await lessonService.updateLesson(lessonId, req.body, req.files);
+      res.json({ success: true, data: lesson });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async softDeleteLesson(req, res) {
+    try {
+      const { lessonId } = req.params;
+      await lessonService.softDeleteLesson(lessonId);
+      res.json({ success: true, message: 'Lesson deleted successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async restoreLesson(req, res) {
+    try {
+      const { lessonId } = req.params;
+      await lessonService.restoreLesson(lessonId);
+      res.json({ success: true, message: 'Lesson restored successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async permanentDeleteLesson(req, res) {
+    try {
+      const { lessonId } = req.params;
+      await lessonService.permanentDeleteLesson(lessonId);
+      res.json({ success: true, message: 'Lesson permanently deleted' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async getLessonsByCourse(req, res) {
+    try {
+      const { courseId } = req.params;
+      const { page = 1, limit = 10 } = req.query;
+      const lessons = await lessonService.getLessonsByCourse(courseId, { page, limit });
+      res.json({ success: true, data: lessons });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class CategoryController {
+  static async createCategory(req, res) {
+    try {
+      const category = await categoryRepo.create(req.body);
+      res.status(201).json({ success: true, data: category });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async getCategory(req, res) {
+    try {
+      const { categoryId } = req.params;
+      const category = await categoryRepo.findById(categoryId);
+      if (!category) {
+        return res.status(404).json({ error: 'Category not found' });
+      }
+      res.json({ success: true, data: category });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async updateCategory(req, res) {
+    try {
+      const { categoryId } = req.params;
+      const category = await categoryRepo.update(categoryId, req.body);
+      res.json({ success: true, data: category });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async softDeleteCategory(req, res) {
+    try {
+      const { categoryId } = req.params;
+      await categoryRepo.softDelete(categoryId);
+      res.json({ success: true, message: 'Category deleted successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async restoreCategory(req, res) {
+    try {
+      const { categoryId } = req.params;
+      await categoryRepo.restore(categoryId);
+      res.json({ success: true, message: 'Category restored successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async permanentDeleteCategory(req, res) {
+    try {
+      const { categoryId } = req.params;
+      await categoryRepo.permanentDelete(categoryId);
+      res.json({ success: true, message: 'Category permanently deleted' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class EnrollmentController {
+  static async enroll(req, res) {
+    try {
+      const { courseId } = req.params;
+      const enrollment = await enrollmentRepo.create({
+        userId: req.user.id,
+        courseId,
+        enrolledAt: new Date(),
+        status: Status.ACTIVE
+      });
+      res.status(201).json({ success: true, data: enrollment });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async updateProgress(req, res) {
+    try {
+      const { enrollmentId } = req.params;
+      const { lessonId, completed, rating } = req.body;
+      
+      const enrollment = await enrollmentRepo.findById(enrollmentId);
+      if (!enrollment) {
+        return res.status(404).json({ error: 'Enrollment not found' });
+      }
+
+      if (lessonId && !enrollment.lessonsCompleted.includes(lessonId)) {
+        enrollment.lessonsCompleted.push(lessonId);
+      }
+
+      if (rating !== undefined) {
+        enrollment.rating = rating;
+      }
+
+      const updatedEnrollment = await enrollmentRepo.update(enrollmentId, enrollment);
+      res.json({ success: true, data: updatedEnrollment });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class SupportController {
+  static async createConversation(req, res) {
+    try {
+      const userId = req.user.id;
+      const conversation = await conversationRepo.create({
+        userId,
+        supportId: null,
+        status: Status.OPEN,
+        messages: []
+      });
+      res.status(201).json({ success: true, data: conversation });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async addMessage(req, res) {
+    try {
+      const { conversationId } = req.params;
+      const { message, senderType } = req.body;
+      
+      const conversation = await conversationRepo.findById(conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+
+      conversation.messages.push({
+        id: Date.now().toString(),
+        message,
+        senderType,
+        timestamp: new Date()
+      });
+
+      const updatedConversation = await conversationRepo.update(conversationId, conversation);
+      res.json({ success: true, data: updatedConversation });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class AdminController {
+  static async getDashboard(req, res) {
+    try {
+      const dashboard = await userService.getDashboard();
+      res.json({ success: true, data: dashboard });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class HrController {
+  static async getInstructors(req, res) {
+    try {
+      const instructors = await userService.getInstructors();
+      res.json({ success: true, data: instructors });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async assignInstructor(req, res) {
+    try {
+      const { courseId } = req.params;
+      const { instructorId } = assignInstructorSchema.parse(req.body);
+      await courseService.assignInstructor(courseId, instructorId);
+      res.json({ success: true, message: 'Instructor assigned successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class BinController {
+  static async getDeletedItems(req, res) {
+    try {
+      const { type } = req.query;
+      const items = await userService.getDeletedItems(type);
+      res.json({ success: true, data: items });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async restoreItem(req, res) {
+    try {
+      const { type, id } = req.params;
+      await userService.restoreItem(type, id);
+      res.json({ success: true, message: 'Item restored successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async permanentDelete(req, res) {
+    try {
+      const { type, id } = req.params;
+      await userService.permanentDelete(type, id);
+      res.json({ success: true, message: 'Item permanently deleted' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+class FileController {
+  static async upload(req, res) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const result = await CloudinaryService.uploadFile(req.file.buffer, {
+        folder: 'sinceides',
+        resource_type: 'auto'
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+
+  static async deleteFile(req, res) {
+    try {
+      const { publicId } = req.params;
+      if (!publicId) {
+        return res.status(400).json({ error: 'Public ID is required' });
+      }
+
+      await CloudinaryService.deleteFile(publicId);
+      res.json({ success: true, message: 'File deleted successfully' });
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  }
+}
+
+// RBAC Middleware
+class RBACMiddleware {
+  static checkRole(roles) {
+    return (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
@@ -181,717 +741,102 @@ export class RBACMiddleware {
   }
 }
 
-export class RequestIdMiddleware {
-  static generate() {
-    return (req: Request, res: Response, next: NextFunction) => {
-      req.headers['x-request-id'] = req.headers['x-request-id'] || require('uuid').v4();
-      res.setHeader('X-Request-ID', req.headers['x-request-id']);
-      next();
-    };
-  }
-}
+// Routes
+// Auth routes
+apiRouter.post('/auth/register', ValidationMiddleware.validate(registerSchema), AuthController.register);
+apiRouter.post('/auth/login', ValidationMiddleware.validate(loginSchema), AuthController.login);
+apiRouter.post('/auth/refresh', ValidationMiddleware.validate(refreshSchema), AuthController.refreshToken);
+apiRouter.post('/auth/logout', AuthController.logout);
 
-export class UploadMiddleware {
-  static setup() {
-    return upload;
-  }
-}
+// User routes
+apiRouter.get('/users/me', AuthMiddleware.authenticate(), UserController.getUser);
+apiRouter.put('/users/me', AuthMiddleware.authenticate(), UserController.updateUser);
+apiRouter.get('/users', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.getUsers);
+apiRouter.put('/users/:userId/block', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.blockUser);
+apiRouter.put('/users/:userId/unblock', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.unblockUser);
+apiRouter.delete('/users/:userId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.softDeleteUser);
+apiRouter.put('/users/:userId/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.restoreUser);
+apiRouter.get('/users/:userId/report', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.getUserReport);
 
-export class ValidationMiddleware {
-  static validate(schema: z.ZodSchema) {
-    return (req: Request, res: Response, next: NextFunction) => {
-      try {
-        schema.parse(req.body);
-        next();
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          return res.status(400).json({
-            error: 'Validation failed',
-            details: error.errors.map(err => ({
-              field: err.path.join('.'),
-              message: err.message
-            }))
-          });
-        }
-        next(error);
+// Course routes
+apiRouter.get('/courses', CourseController.getCoursesPublic);
+apiRouter.post('/courses', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), upload.single('banner'), UploadMiddleware.processImage(), ValidationMiddleware.validate(courseCreateSchema), CourseController.createCourse);
+apiRouter.get('/courses/:courseId', CourseController.getCourse);
+apiRouter.put('/courses/:courseId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), upload.single('banner'), UploadMiddleware.processImage(), CourseController.updateCourse);
+apiRouter.delete('/courses/:courseId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), CourseController.softDeleteCourse);
+apiRouter.put('/courses/:courseId/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), CourseController.restoreCourse);
+
+// Lesson routes
+apiRouter.post('/lessons', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), upload.fields([{ name: 'video', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), ValidationMiddleware.validate(lessonCreateSchema), LessonController.createLesson);
+apiRouter.get('/lessons/:lessonId', AuthMiddleware.authenticate(), LessonController.getLesson);
+apiRouter.put('/lessons/:lessonId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), upload.fields([{ name: 'video', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]), LessonController.updateLesson);
+apiRouter.delete('/lessons/:lessonId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), LessonController.softDeleteLesson);
+apiRouter.put('/lessons/:lessonId/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR, Role.ADMIN]), LessonController.restoreLesson);
+apiRouter.delete('/lessons/:lessonId/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), LessonController.permanentDeleteLesson);
+apiRouter.get('/courses/:courseId/lessons', AuthMiddleware.authenticate(), LessonController.getLessonsByCourse);
+
+// Category routes
+apiRouter.post('/categories', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.createCategory);
+apiRouter.get('/categories/:categoryId', CategoryController.getCategory);
+apiRouter.put('/categories/:categoryId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.updateCategory);
+apiRouter.delete('/categories/:categoryId', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.softDeleteCategory);
+apiRouter.put('/categories/:categoryId/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.restoreCategory);
+apiRouter.delete('/categories/:categoryId/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.permanentDeleteCategory);
+
+// Enrollment routes
+apiRouter.post('/enrollments/:courseId', AuthMiddleware.authenticate(), EnrollmentController.enroll);
+apiRouter.put('/enrollments/:enrollmentId/progress', AuthMiddleware.authenticate(), EnrollmentController.updateProgress);
+
+// Support routes
+apiRouter.post('/support/conversations', AuthMiddleware.authenticate(), SupportController.createConversation);
+apiRouter.post('/support/conversations/:conversationId/messages', AuthMiddleware.authenticate(), SupportController.addMessage);
+
+// Admin routes
+apiRouter.get('/admin/dashboard', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), AdminController.getDashboard);
+
+// HR routes
+apiRouter.get('/hr/instructors', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.HR, Role.ADMIN]), HrController.getInstructors);
+apiRouter.post('/hr/courses/:courseId/assign-instructor', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.HR, Role.ADMIN]), ValidationMiddleware.validate(assignInstructorSchema), HrController.assignInstructor);
+
+// Bin routes
+apiRouter.get('/bin', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.getDeletedItems);
+apiRouter.put('/bin/:type/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.restoreItem);
+apiRouter.delete('/bin/:type/:id/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.permanentDelete);
+
+// File routes
+apiRouter.post('/files/upload', upload.single('file'), FileController.upload);
+apiRouter.delete('/files/:publicId', FileController.deleteFile);
+
+// Health check
+apiRouter.get('/health', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      environment: NODE_ENV,
+      vercel: {
+        region: VERCEL_REGION,
+        url: VERCEL_URL
       }
-    };
-  }
-}
-
-export class ErrorHandler {
-  static handle() {
-    return (error: any, req: Request, res: Response, next: NextFunction) => {
-      console.error('Error:', error);
-
-      // Multer errors
-      if (error.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({
-          error: 'File too large',
-          message: `Maximum file size is ${process.env.MAX_FILE_SIZE || '50MB'}`
-        });
-      }
-
-      if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-        return res.status(400).json({
-          error: 'Unexpected file field',
-          message: 'File field name is not expected'
-        });
-      }
-
-      // Validation errors
-      if (error.name === 'ValidationError') {
-        return res.status(400).json({
-          error: 'Validation failed',
-          message: error.message
-        });
-      }
-
-      // JWT errors
-      if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({
-          error: 'Invalid token',
-          message: 'Authentication token is invalid'
-        });
-      }
-
-      if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          error: 'Token expired',
-          message: 'Authentication token has expired'
-        });
-      }
-
-      // Database errors
-      if (error.code === '23505') { // Unique constraint violation
-        return res.status(409).json({
-          error: 'Conflict',
-          message: 'Resource already exists'
-        });
-      }
-
-      if (error.code === '23503') { // Foreign key constraint violation
-        return res.status(400).json({
-          error: 'Invalid reference',
-          message: 'Referenced resource does not exist'
-        });
-      }
-
-      // Default error
-      const statusCode = error.statusCode || 500;
-      const message = NODE_ENV === 'production' ? 'Internal server error' : error.message;
-
-      res.status(statusCode).json({
-        error: 'Internal server error',
-        message,
-        ...(NODE_ENV === 'development' && { stack: error.stack })
-      });
-    };
-  }
-}
-
-// Controllers
-export class AuthController {
-  static async register(req: Request, res: Response) {
-    try {
-      const data = registerSchema.parse(req.body);
-      const result = await authService.register(
-        data.name,
-        data.email,
-        data.password,
-        data.phoneNumber,
-        data.role
-      );
-      res.status(201).json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
     }
-  }
+  });
+});
 
-  static async login(req: Request, res: Response) {
-    try {
-      const data = loginSchema.parse(req.body);
-      const result = await authService.login(data.email, data.password);
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(401).json({ error: error.message });
-    }
-  }
-
-  static async refreshToken(req: Request, res: Response) {
-    try {
-      const data = refreshSchema.parse(req.body);
-      const result = await authService.refreshToken(data.refreshToken);
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(401).json({ error: error.message });
-    }
-  }
-
-  static async logout(req: Request, res: Response) {
-    try {
-      const data = refreshSchema.parse(req.body);
-      await authService.logout(data.refreshToken);
-      res.json({ success: true, data: { message: 'Logged out successfully' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class UserController {
-  static async getUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const user = await userService.getUserById(userId);
-      res.json({ success: true, data: user });
-    } catch (error: any) {
-      res.status(404).json({ error: error.message });
-    }
-  }
-
-  static async updateUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const updateData = req.body;
-      const user = await userService.updateUser(userId, updateData);
-      res.json({ success: true, data: user });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async blockUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const result = await userService.blockUser(userId);
-      res.json({ success: true, data: { blocked: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async unblockUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const result = await userService.unblockUser(userId);
-      res.json({ success: true, data: { unblocked: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async softDeleteUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const result = await userService.softDeleteUser(userId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async restoreUser(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      const result = await userService.restoreUser(userId);
-      res.json({ success: true, data: { restored: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getUserReport(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.params.id;
-      // Implementation for user report
-      res.json({ success: true, data: { message: 'User report feature coming soon' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getUsers(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { role, limit = 100, offset = 0 } = req.query;
-      const users = await userService.getUsers(
-        role as Role,
-        parseInt(limit as string),
-        parseInt(offset as string)
-      );
-      res.json({ success: true, data: users });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class CourseController {
-  static async getCoursesPublic(req: Request, res: Response) {
-    try {
-      const { limit = 100, offset = 0 } = req.query;
-      const result = await courseService.getCoursesPublic(
-        parseInt(limit as string),
-        parseInt(offset as string)
-      );
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async createCourse(req: AuthenticatedRequest, res: Response) {
-    try {
-      const data = courseCreateSchema.parse(req.body);
-      const thumbnailFile = req.files?.['thumbnail']?.[0];
-      const introVideoFile = req.files?.['introVideo']?.[0];
-
-      const course = await courseService.createCourse(
-        data,
-        thumbnailFile?.buffer,
-        introVideoFile?.buffer
-      );
-      res.status(201).json({ success: true, data: course });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getCourse(req: Request, res: Response) {
-    try {
-      const courseId = req.params.id;
-      const course = await courseService.getCourseById(courseId);
-      res.json({ success: true, data: course });
-    } catch (error: any) {
-      res.status(404).json({ error: error.message });
-    }
-  }
-
-  static async updateCourse(req: AuthenticatedRequest, res: Response) {
-    try {
-      const courseId = req.params.id;
-      const data = req.body;
-      const thumbnailFile = req.files?.['thumbnail']?.[0];
-      const introVideoFile = req.files?.['introVideo']?.[0];
-
-      const course = await courseService.updateCourse(
-        courseId,
-        data,
-        thumbnailFile?.buffer,
-        introVideoFile?.buffer
-      );
-      res.json({ success: true, data: course });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async softDeleteCourse(req: AuthenticatedRequest, res: Response) {
-    try {
-      const courseId = req.params.id;
-      const result = await courseService.softDeleteCourse(courseId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async restoreCourse(req: AuthenticatedRequest, res: Response) {
-    try {
-      const courseId = req.params.id;
-      const result = await courseService.restoreCourse(courseId);
-      res.json({ success: true, data: { restored: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class LessonController {
-  static async createLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const courseId = req.params.courseId;
-      const data = lessonCreateSchema.parse(req.body);
-      const videoFile = req.files?.['video']?.[0];
-      const thumbnailFile = req.files?.['thumbnail']?.[0];
-
-      const lesson = await lessonService.createLesson(
-        { ...data, courseId, instructorId: req.user!.id },
-        videoFile?.buffer,
-        thumbnailFile?.buffer
-      );
-      res.status(201).json({ success: true, data: lesson });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const lessonId = req.params.id;
-      const lesson = await lessonService.getLessonById(lessonId);
-      res.json({ success: true, data: lesson });
-    } catch (error: any) {
-      res.status(404).json({ error: error.message });
-    }
-  }
-
-  static async updateLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const lessonId = req.params.id;
-      const data = req.body;
-      const videoFile = req.files?.['video']?.[0];
-      const thumbnailFile = req.files?.['thumbnail']?.[0];
-
-      const lesson = await lessonService.updateLesson(
-        lessonId,
-        data,
-        videoFile?.buffer,
-        thumbnailFile?.buffer
-      );
-      res.json({ success: true, data: lesson });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async softDeleteLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const lessonId = req.params.id;
-      const result = await lessonService.softDeleteLesson(lessonId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async restoreLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const lessonId = req.params.id;
-      const result = await lessonService.restoreLesson(lessonId);
-      res.json({ success: true, data: { restored: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async permanentDeleteLesson(req: AuthenticatedRequest, res: Response) {
-    try {
-      const lessonId = req.params.id;
-      const result = await lessonService.permanentDeleteLesson(lessonId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getLessonsByCourse(req: AuthenticatedRequest, res: Response) {
-    try {
-      const courseId = req.params.courseId;
-      const { limit = 10, offset = 0 } = req.query;
-      const result = await lessonService.getLessonsByCourse(
-        courseId,
-        parseInt(limit as string),
-        parseInt(offset as string)
-      );
-      res.json({ success: true, data: result });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class CategoryController {
-  static async createCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { name, description } = req.body;
-      const category = await categoryRepo.create({ name, description });
-      res.status(201).json({ success: true, data: category });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async getCategory(req: Request, res: Response) {
-    try {
-      const categoryId = req.params.id;
-      const category = await categoryRepo.findById(categoryId);
-      if (!category) {
-        return res.status(404).json({ error: 'Category not found' });
-      }
-      res.json({ success: true, data: category });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async updateCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const categoryId = req.params.id;
-      const data = req.body;
-      const category = await categoryRepo.update(categoryId, data);
-      res.json({ success: true, data: category });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async softDeleteCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const categoryId = req.params.id;
-      const result = await categoryRepo.softDelete(categoryId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async restoreCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const categoryId = req.params.id;
-      const result = await categoryRepo.restore(categoryId);
-      res.json({ success: true, data: { restored: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async permanentDeleteCategory(req: AuthenticatedRequest, res: Response) {
-    try {
-      const categoryId = req.params.id;
-      const result = await categoryRepo.permanentDelete(categoryId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class EnrollmentController {
-  static async enroll(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { courseId } = req.body;
-      const userId = req.user!.id;
-      
-      // Check if already enrolled
-      const existingEnrollment = await enrollmentRepo.findByUserAndCourse(userId, courseId);
-      if (existingEnrollment) {
-        return res.status(409).json({ error: 'Already enrolled in this course' });
-      }
-
-      const enrollment = await enrollmentRepo.create({
-        userId,
-        courseId,
-        lessonsCompleted: [],
-        rating: null,
-        completedAt: null
-      });
-
-      res.status(201).json({ success: true, data: enrollment });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async updateProgress(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { enrollmentId, lessonId, rating } = req.body;
-      
-      const enrollment = await enrollmentRepo.findById(enrollmentId);
-      if (!enrollment) {
-        return res.status(404).json({ error: 'Enrollment not found' });
-      }
-
-      // Add lesson to completed lessons if not already there
-      if (lessonId && !enrollment.lessonsCompleted.includes(lessonId)) {
-        const updatedLessonsCompleted = [...enrollment.lessonsCompleted, lessonId];
-        await enrollmentRepo.update(enrollmentId, { lessonsCompleted: updatedLessonsCompleted });
-      }
-
-      // Update rating if provided
-      if (rating !== undefined) {
-        await enrollmentRepo.update(enrollmentId, { rating });
-      }
-
-      res.json({ success: true, data: { message: 'Progress updated successfully' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class SupportController {
-  static async createConversation(req: AuthenticatedRequest, res: Response) {
-    try {
-      const userId = req.user!.id;
-      const conversation = await conversationRepo.create({
-        userId,
-        supportId: null,
-        status: Status.OPEN,
-        messages: []
-      });
-      res.status(201).json({ success: true, data: conversation });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async addMessage(req: AuthenticatedRequest, res: Response) {
-    try {
-      const conversationId = req.params.id;
-      const { content } = req.body;
-      const senderId = req.user!.id;
-
-      const message = {
-        id: require('uuid').v4(),
-        senderId,
-        content,
-        timestamp: new Date().toISOString(),
-        read: false
-      };
-
-      const result = await conversationRepo.addMessage(conversationId, message);
-      res.json({ success: true, data: { added: result, message } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class AdminController {
-  static async getDashboard(req: AuthenticatedRequest, res: Response) {
-    try {
-      // Implementation for admin dashboard
-      res.json({ success: true, data: { message: 'Admin dashboard feature coming soon' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class HrController {
-  static async getInstructors(req: AuthenticatedRequest, res: Response) {
-    try {
-      const instructors = await userService.getUsers(Role.INSTRUCTOR);
-      res.json({ success: true, data: instructors });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async assignInstructor(req: AuthenticatedRequest, res: Response) {
-    try {
-      const data = assignInstructorSchema.parse(req.body);
-      const result = await userRepo.assignHr(data.instructorId, data.hrId);
-      res.json({ success: true, data: { assigned: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-export class BinController {
-  static async getDeletedItems(req: AuthenticatedRequest, res: Response) {
-    try {
-      // Implementation for getting deleted items
-      res.json({ success: true, data: { message: 'Bin feature coming soon' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async restoreItem(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { collection, id } = req.params;
-      // Implementation for restoring items
-      res.json({ success: true, data: { message: 'Restore feature coming soon' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async permanentDelete(req: AuthenticatedRequest, res: Response) {
-    try {
-      const { collection, id } = req.params;
-      // Implementation for permanent deletion
-      res.json({ success: true, data: { message: 'Permanent delete feature coming soon' } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-// File Upload Controller
-export class FileController {
-  static async upload(req: Request, res: Response) {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-      }
-
-      const { buffer, mimetype, originalname } = req.file;
-      let url = '';
-
-      if (mimetype.startsWith('image/')) {
-        url = await CloudinaryService.uploadImage(buffer, 'uploads/images');
-      } else if (mimetype.startsWith('video/')) {
-        url = await CloudinaryService.uploadVideo(buffer, 'uploads/videos');
-      } else {
-        return res.status(400).json({ error: 'Unsupported file type' });
-      }
-
-      res.json({
-        success: true,
-        data: {
-          url,
-          originalName: originalname,
-          mimetype,
-          size: buffer.length
-        }
-      });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-
-  static async deleteFile(req: Request, res: Response) {
-    try {
-      const { publicId } = req.body;
-      if (!publicId) {
-        return res.status(400).json({ error: 'Public ID is required' });
-      }
-
-      const result = await CloudinaryService.deleteFile(publicId);
-      res.json({ success: true, data: { deleted: result } });
-    } catch (error: any) {
-      res.status(400).json({ error: error.message });
-    }
-  }
-}
-
-// Swagger Configuration
+// Swagger documentation
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
       title: 'Sinceides Platform API',
       version: '2.0.0',
-      description: 'Comprehensive API documentation for Sinceides LMS Platform with Supabase and Cloudinary integration',
-      contact: {
-        name: 'Sinceides Team',
-        email: 'support@sinceides.com'
-      },
-      license: {
-        name: 'MIT',
-        url: 'https://opensource.org/licenses/MIT'
-      }
+      description: 'Advanced Learning Management System with Supabase and Cloudinary'
     },
     servers: [
       {
-        url: process.env.NODE_ENV === 'production' 
-          ? 'https://your-domain.vercel.app/api' 
-          : `http://localhost:${PORT}/api`,
-        description: process.env.NODE_ENV === 'production' ? 'Production server' : 'Development server'
+        url: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${PORT}`,
+        description: 'API Server'
       }
     ],
     components: {
@@ -899,234 +844,28 @@ const swaggerOptions = {
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
-          bearerFormat: 'JWT',
-          description: 'JWT token obtained from login endpoint'
-        }
-      },
-      schemas: {
-        User: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-            name: { type: 'string' },
-            email: { type: 'string', format: 'email' },
-            phoneNumber: { type: 'string' },
-            dateOfBirth: { type: 'string', format: 'date' },
-            country: { type: 'string' },
-            gender: { type: 'string', enum: ['Male', 'Female', 'Other'] },
-            role: { type: 'string', enum: ['admin', 'instructor', 'student', 'hr', 'support'] },
-            profilePictureUrl: { type: 'string', format: 'uri', nullable: true },
-            isBlocked: { type: 'boolean' },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' }
-          }
-        },
-        Course: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-            title: { type: 'string' },
-            description: { type: 'string' },
-            thumbnailUrl: { type: 'string', format: 'uri' },
-            introVideoUrl: { type: 'string', format: 'uri', nullable: true },
-            instructorId: { type: 'string', format: 'uuid' },
-            totalLessons: { type: 'integer' },
-            categoryId: { type: 'string', format: 'uuid' },
-            language: { type: 'string' },
-            level: { type: 'string', enum: ['Beginner', 'Intermediate', 'Advanced'] },
-            tags: { type: 'array', items: { type: 'string' } },
-            price: { type: 'number', nullable: true },
-            duration: { type: 'number', nullable: true },
-            rating: { type: 'number', nullable: true },
-            enrollmentCount: { type: 'integer', nullable: true },
-            isPublished: { type: 'boolean', nullable: true },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' }
-          }
-        },
-        Lesson: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', format: 'uuid' },
-            courseId: { type: 'string', format: 'uuid' },
-            lessonNumber: { type: 'integer' },
-            title: { type: 'string' },
-            description: { type: 'string' },
-            videoUrl: { type: 'string', format: 'uri' },
-            thumbnailUrl: { type: 'string', format: 'uri' },
-            attachments: { type: 'array', items: { type: 'string' } },
-            instructorId: { type: 'string', format: 'uuid' },
-            durationMinutes: { type: 'integer' },
-            createdAt: { type: 'string', format: 'date-time' },
-            updatedAt: { type: 'string', format: 'date-time' }
-          }
-        },
-        Error: {
-          type: 'object',
-          properties: {
-            error: { type: 'string' },
-            message: { type: 'string' },
-            details: { type: 'array', items: { type: 'object' } }
-          }
+          bearerFormat: 'JWT'
         }
       }
-    },
-    security: [{ bearerAuth: [] }]
+    }
   },
-  apis: ['./api.js'] // Path to the API file
+  apis: ['./api/api.js']
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
+apiRouter.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Initialize middleware
+// Apply middleware
 app.use(RequestIdMiddleware.generate());
-app.use(AuthMiddleware.initializePassport());
-
-// Swagger documentation
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'Sinceides Platform API Documentation'
-}));
-
-// API Routes
-const apiRouter = Router();
-
-// Authentication routes
-apiRouter.post('/auth/register', ValidationMiddleware.validate(registerSchema), AuthController.register);
-apiRouter.post('/auth/login', ValidationMiddleware.validate(loginSchema), AuthController.login);
-apiRouter.post('/auth/refresh', ValidationMiddleware.validate(refreshSchema), AuthController.refreshToken);
-apiRouter.post('/auth/logout', ValidationMiddleware.validate(refreshSchema), AuthController.logout);
-
-// User routes
-apiRouter.get('/users/:id', AuthMiddleware.authenticate(), UserController.getUser);
-apiRouter.put('/users/:id', AuthMiddleware.authenticate(), UserController.updateUser);
-apiRouter.get('/users/:id/report', AuthMiddleware.authenticate(), UserController.getUserReport);
-apiRouter.delete('/users/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), UserController.softDeleteUser);
-apiRouter.post('/users/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), UserController.restoreUser);
-apiRouter.put('/users/:id/block', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), UserController.blockUser);
-apiRouter.put('/users/:id/unblock', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), UserController.unblockUser);
-apiRouter.get('/users', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), UserController.getUsers);
-
-// Course routes
-apiRouter.get('/courses', CourseController.getCoursesPublic);
-apiRouter.post('/courses', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), UploadMiddleware.setup().fields([
-  { name: 'thumbnail', maxCount: 1 },
-  { name: 'introVideo', maxCount: 1 }
-]), ValidationMiddleware.validate(courseCreateSchema), CourseController.createCourse);
-apiRouter.get('/courses/:id', CourseController.getCourse);
-apiRouter.put('/courses/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), UploadMiddleware.setup().fields([
-  { name: 'thumbnail', maxCount: 1 },
-  { name: 'introVideo', maxCount: 1 }
-]), CourseController.updateCourse);
-apiRouter.delete('/courses/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), CourseController.softDeleteCourse);
-apiRouter.post('/courses/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), CourseController.restoreCourse);
-
-// Lesson routes
-apiRouter.post('/courses/:courseId/lessons', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR]), UploadMiddleware.setup().fields([
-  { name: 'video', maxCount: 1 },
-  { name: 'thumbnail', maxCount: 1 }
-]), ValidationMiddleware.validate(lessonCreateSchema), LessonController.createLesson);
-apiRouter.get('/courses/:courseId/lessons', AuthMiddleware.authenticate(), LessonController.getLessonsByCourse);
-apiRouter.get('/courses/:courseId/lessons/:id', AuthMiddleware.authenticate(), LessonController.getLesson);
-apiRouter.put('/courses/:courseId/lessons/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.INSTRUCTOR]), UploadMiddleware.setup().fields([
-  { name: 'video', maxCount: 1 },
-  { name: 'thumbnail', maxCount: 1 }
-]), LessonController.updateLesson);
-apiRouter.delete('/courses/:courseId/lessons/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), LessonController.softDeleteLesson);
-apiRouter.post('/courses/:courseId/lessons/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.INSTRUCTOR]), LessonController.restoreLesson);
-apiRouter.delete('/courses/:courseId/lessons/:id/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), LessonController.permanentDeleteLesson);
-
-// Category routes
-apiRouter.post('/categories', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.createCategory);
-apiRouter.get('/categories/:id', CategoryController.getCategory);
-apiRouter.put('/categories/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.updateCategory);
-apiRouter.delete('/categories/:id', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.softDeleteCategory);
-apiRouter.post('/categories/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.restoreCategory);
-apiRouter.delete('/categories/:id/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), CategoryController.permanentDeleteCategory);
-
-// Enrollment routes
-apiRouter.get('/enrollments', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), async (req, res) => {
-  try {
-    const { userId, courseId } = req.query;
-    if (userId && courseId) {
-      const enrollment = await enrollmentRepo.findByUserAndCourse(userId as string, courseId as string);
-      res.json({ success: true, data: enrollment });
-    } else {
-      const { limit = 100, offset = 0 } = req.query;
-      const result = await enrollmentRepo.findMany({}, false, parseInt(limit as string), parseInt(offset as string));
-      res.json({ success: true, data: result });
-    }
-  } catch (error: any) {
-    res.status(400).json({ error: error.message });
-  }
-});
-apiRouter.post('/enrollments', AuthMiddleware.authenticate(), EnrollmentController.enroll);
-apiRouter.put('/enrollments/progress', AuthMiddleware.authenticate(), EnrollmentController.updateProgress);
-
-// Support routes
-apiRouter.post('/support/conversations', AuthMiddleware.authenticate(), SupportController.createConversation);
-apiRouter.post('/support/conversations/:id/messages', AuthMiddleware.authenticate(), SupportController.addMessage);
-
-// Admin routes
-apiRouter.get('/admin/dashboard', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), AdminController.getDashboard);
-
-// HR routes
-apiRouter.get('/hr/instructors', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), HrController.getInstructors);
-apiRouter.post('/hr/assign-instructor', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN, Role.HR]), ValidationMiddleware.validate(assignInstructorSchema), HrController.assignInstructor);
-
-// Bin routes
-apiRouter.get('/bin', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.getDeletedItems);
-apiRouter.post('/:collection/:id/restore', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.restoreItem);
-apiRouter.delete('/:collection/:id/permanent', AuthMiddleware.authenticate(), RBACMiddleware.checkRole([Role.ADMIN]), BinController.permanentDelete);
-
-// File upload routes
-apiRouter.post('/upload', UploadMiddleware.setup().single('file'), FileController.upload);
-apiRouter.delete('/files', FileController.deleteFile);
-
-// Health check
-apiRouter.get('/health', (req: Request, res: Response) => {
-  res.json({
-    success: true,
-    data: {
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      version: '2.0.0',
-      environment: NODE_ENV
-    }
-  });
-});
-
-// Mount API routes
 app.use('/api', apiRouter);
 
-// Error handling middleware
+// Error handling
 app.use(ErrorHandler.handle());
 
 // 404 handler
-app.use('*', (req: Request, res: Response) => {
-  res.status(404).json({
-    error: 'Not Found',
-    message: `Route ${req.method} ${req.originalUrl} not found`,
-    availableRoutes: [
-      'GET /api/health',
-      'GET /docs',
-      'POST /api/auth/register',
-      'POST /api/auth/login',
-      'GET /api/courses',
-      'POST /api/courses',
-      'GET /api/users/:id'
-    ]
-  });
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route not found' });
 });
-
-// Start server
-if (NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📚 API Documentation: http://localhost:${PORT}/docs`);
-    console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
-  });
-}
 
 // Export for Vercel
 module.exports = app;
