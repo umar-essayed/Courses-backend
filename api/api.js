@@ -4,22 +4,22 @@
  * Updated with enhanced security and comprehensive documentation
  */
 
-import express, { Request, Response, NextFunction, Router } from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import compression from 'compression';
-import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
-import multer from 'multer';
-import passport from 'passport';
-import { Strategy as JwtStrategy, ExtractJwt } from 'passport-jwt';
-import { z } from 'zod';
-import swaggerJsdoc from 'swagger-jsdoc';
-import swaggerUi from 'swagger-ui-express';
-import sharp from 'sharp';
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
+const multer = require('multer');
+const passport = require('passport');
+const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
+const { z } = require('zod');
+const swaggerJsdoc = require('swagger-jsdoc');
+const swaggerUi = require('swagger-ui-express');
+const sharp = require('sharp');
 
 // Import services and types
-import {
+const {
   authService,
   userService,
   courseService,
@@ -62,20 +62,20 @@ import {
   CategoryDTO,
   EnrollmentDTO,
   SupportConversationDTO
-} from './main.js';
+} = require('./main.js');
 
 // Import security and video processing
-import SecurityConfig from './security.js';
-import { videoProcessingService, videoStreamingService } from './video-processing.js';
+const SecurityConfig = require('./security.js');
+const { videoProcessingService, videoStreamingService } = require('./video-processing.js');
 
-// Types
-interface AuthenticatedRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: Role;
-  };
-}
+// Types (using JSDoc for TypeScript-like comments)
+/**
+ * @typedef {Object} AuthenticatedRequest
+ * @property {Object} user
+ * @property {string} user.id
+ * @property {string} user.email
+ * @property {string} user.role
+ */
 
 // Configuration
 const PORT = process.env.PORT || 3000;
@@ -1129,4 +1129,4 @@ if (NODE_ENV !== 'production') {
 }
 
 // Export for Vercel
-export default app;
+module.exports = app;

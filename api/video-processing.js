@@ -3,8 +3,8 @@
  * This file contains video processing, compression, and streaming functionality
  */
 
-import { v2 as cloudinary } from 'cloudinary';
-import sharp from 'sharp';
+const { v2: cloudinary } = require('cloudinary');
+const sharp = require('sharp');
 
 // Video Processing Configuration
 export class VideoProcessingConfig {
@@ -550,10 +550,10 @@ export class VideoStreamingService {
 }
 
 // Initialize services
-export const videoProcessingService = new VideoProcessingService();
-export const videoStreamingService = new VideoStreamingService(videoProcessingService);
+const videoProcessingService = new VideoProcessingService();
+const videoStreamingService = new VideoStreamingService(videoProcessingService);
 
-export default {
+module.exports = {
   VideoProcessingConfig,
   VideoProcessingService,
   VideoStreamingService,

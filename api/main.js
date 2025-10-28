@@ -4,7 +4,7 @@
  * Updated to use Supabase and Cloudinary with enhanced security
  */
 
-import {
+const {
   supabase,
   cloudinary,
   redisClient,
@@ -47,13 +47,13 @@ import {
   courseCreateSchema,
   lessonCreateSchema,
   assignInstructorSchema
-} from './services.js';
+} = require('./services.js');
 
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { v4 as uuidv4 } from 'uuid';
-import sharp from 'sharp';
-import { z } from 'zod';
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
+const sharp = require('sharp');
+const { z } = require('zod');
 
 // Additional Interfaces
 export interface Exam extends BaseEntity {
@@ -1273,12 +1273,12 @@ export class LessonService {
 }
 
 // Initialize services
-export const authService = new AuthService(userRepo, refreshTokenRepo, cacheService, activityLogRepo);
-export const userService = new UserService(userRepo, enrollmentRepo, conversationRepo, cacheService, activityLogRepo, CloudinaryService);
-export const courseService = new CourseService(courseRepo, lessonRepo, categoryRepo, cacheService, activityLogRepo, userRepo, CloudinaryService);
-export const lessonService = new LessonService(lessonRepo, courseRepo, cacheService, activityLogRepo, userRepo);
+const authService = new AuthService(userRepo, refreshTokenRepo, cacheService, activityLogRepo);
+const userService = new UserService(userRepo, enrollmentRepo, conversationRepo, cacheService, activityLogRepo, CloudinaryService);
+const courseService = new CourseService(courseRepo, lessonRepo, categoryRepo, cacheService, activityLogRepo, userRepo, CloudinaryService);
+const lessonService = new LessonService(lessonRepo, courseRepo, cacheService, activityLogRepo, userRepo);
 
-export default {
+module.exports = {
   authService,
   userService,
   courseService,
@@ -1289,5 +1289,36 @@ export default {
   roadmapRepo,
   challengeRepo,
   learningProfileRepo,
-  recommendationRepo
+  recommendationRepo,
+  userRepo,
+  courseRepo,
+  lessonRepo,
+  categoryRepo,
+  enrollmentRepo,
+  conversationRepo,
+  refreshTokenRepo,
+  activityLogRepo,
+  cacheService,
+  CloudinaryService,
+  Role,
+  Level,
+  Status,
+  ChallengeType,
+  ChallengeStatus,
+  ExamType,
+  QuestionType,
+  LearningStyle,
+  ProficiencyLevel,
+  registerSchema,
+  loginSchema,
+  refreshSchema,
+  courseCreateSchema,
+  lessonCreateSchema,
+  assignInstructorSchema,
+  UserDTO,
+  CourseDTO,
+  LessonDTO,
+  CategoryDTO,
+  EnrollmentDTO,
+  SupportConversationDTO
 };

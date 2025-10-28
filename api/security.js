@@ -3,12 +3,12 @@
  * This file contains enhanced security measures and configurations
  */
 
-import crypto from 'crypto';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import rateLimit from 'express-rate-limit';
-import helmet from 'helmet';
-import cors from 'cors';
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const cors = require('cors');
 
 // Security Configuration
 export class SecurityConfig {
@@ -444,4 +444,4 @@ export class SecurityConfig {
   }
 }
 
-export default SecurityConfig;
+module.exports = SecurityConfig;

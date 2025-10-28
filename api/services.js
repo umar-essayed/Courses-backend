@@ -4,14 +4,14 @@
  * Updated to use Supabase and Cloudinary
  */
 
-import { createClient } from '@supabase/supabase-js';
-import { v2 as cloudinary } from 'cloudinary';
-import Redis from 'ioredis';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { v4 as uuidv4 } from 'uuid';
-import sharp from 'sharp';
-import { z } from 'zod';
+const { createClient } = require('@supabase/supabase-js');
+const { v2: cloudinary } = require('cloudinary');
+const Redis = require('ioredis');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
+const sharp = require('sharp');
+const { z } = require('zod');
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -926,7 +926,7 @@ export const assignInstructorSchema = z.object({
   hrId: z.string().uuid()
 });
 
-export default {
+module.exports = {
   supabase,
   cloudinary,
   redisClient,
@@ -939,5 +939,35 @@ export default {
   conversationRepo,
   refreshTokenRepo,
   activityLogRepo,
-  CloudinaryService
+  CloudinaryService,
+  User,
+  Course,
+  Lesson,
+  Category,
+  Enrollment,
+  SupportConversation,
+  RefreshToken,
+  ActivityLog,
+  UserDTO,
+  CourseDTO,
+  LessonDTO,
+  CategoryDTO,
+  EnrollmentDTO,
+  SupportConversationDTO,
+  Gender,
+  Role,
+  Level,
+  Status,
+  ChallengeType,
+  ChallengeStatus,
+  ExamType,
+  QuestionType,
+  LearningStyle,
+  ProficiencyLevel,
+  registerSchema,
+  loginSchema,
+  refreshSchema,
+  courseCreateSchema,
+  lessonCreateSchema,
+  assignInstructorSchema
 };
